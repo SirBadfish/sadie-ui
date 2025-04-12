@@ -102,9 +102,9 @@
   
   <div class="flex-1 container mx-auto max-w-4xl flex flex-col p-4">
     <div class="flex-1 overflow-y-auto bg-white rounded-lg shadow-sm p-4 mb-4 border border-gray-200" bind:this={chatContainer}>
-      <!-- {#each messages as message (message.id)}
+      {#each messages as message (message.id)}
         <Message {message} />
-      {/each} -->
+      {/each}
       
       {#if isTyping}
         <div class="flex items-center ml-10 mt-2">
@@ -138,7 +138,7 @@
 
 <style>
   .typing-indicator {
-    /* @apply flex ml-2; */ /* Temporarily commented out due to build error */
+    @apply flex ml-2;
   }
   
   .typing-indicator span {
