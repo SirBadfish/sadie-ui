@@ -1,10 +1,10 @@
-import tailwindcss from '@tailwindcss/vite';
+// import tailwindcss from '@tailwindcss/vite'; // Removed - Using PostCSS setup for Tailwind v3
 import { svelteTesting } from '@testing-library/svelte/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-	plugins: [tailwindcss(), sveltekit()],
+	plugins: [sveltekit()], // Removed tailwindcss() - Using PostCSS setup for Tailwind v3
 	test: {
 		workspace: [
 			{
