@@ -1,27 +1,35 @@
-<script>
+<script lang="ts">
+  // Define types
+  interface FileStructure {
+    [key: string]: FileStructure | string; // Can be nested objects or string placeholders for files
+  }
+  interface ExpandedDirs {
+    [key: string]: boolean;
+  }
+
   // Props
-  export let fileStructure = {};
-  export let currentPath = '~/';
-  
+  export let fileStructure: FileStructure = {};
+  export let currentPath: string = '~/';
+
   // State
-  let expandedDirs = {};
-  
+  let expandedDirs: ExpandedDirs = {};
+
   // Dispatch events for file/directory interactions
   import { createEventDispatcher } from 'svelte';
-  const dispatch = createEventDispatcher();
-  
-  function toggleDir(path) {
-    expandedDirs[path] = !expandedDirs[path];
+  const dispatch = createEventDispatcher<{select: {path: string}, refresh: void}>(); // Add event types
+
+  function toggleDir(path: string): void {
+    expandedDirs[path] = !expandedDirs[path]; // No type error now
   }
-  
-  function selectFile(path) {
+
+  function selectFile(path: string): void {
     dispatch('select', { path });
   }
-  
-  function getFileIcon(filename) {
+
+  function getFileIcon(filename: string): string {
     // Determine icon based on file extension
-    const ext = filename.split('.').pop().toLowerCase();
-    
+    const ext = filename.split('.').pop()?.toLowerCase() || ''; // Handle potential undefined from pop()
+
     switch(ext) {
       case 'js': return '📄 '; // JavaScript
       case 'ts': return '📄 '; // TypeScript
@@ -46,51 +54,57 @@
       🔄
     </button>
   </div>
-  
+
   <div class="file-tree-content">
     {#each Object.entries(fileStructure) as [name, content]}
       {@const path = currentPath + name}
-      
-      {#if typeof content === 'object'}
+
+      {#if typeof content === 'object' && content !== null}
         <!-- Directory -->
         <div class="directory">
-          <div 
-            class="dir-item" 
+          <button
+            type="button"
+            class="dir-item"
             on:click={() => toggleDir(path)}
+            aria-expanded={expandedDirs[path] ? 'true' : 'false'}
           >
             <span class="dir-icon">{expandedDirs[path] ? '📂' : '📁'}</span>
             <span class="dir-name">{name}</span>
-          </div>
-          
+          </button>
+
           {#if expandedDirs[path]}
             <div class="dir-contents">
               {#each Object.entries(content) as [subName, subContent]}
                 {@const subPath = path + '/' + subName}
-                
-                {#if typeof subContent === 'object'}
+
+                {#if typeof subContent === 'object' && subContent !== null}
                   <!-- Subdirectory -->
                   <div class="directory sub-directory">
-                    <div 
-                      class="dir-item" 
-                      on:click|stopPropagation={() => toggleDir(subPath)}
-                    >
-                      <span class="dir-icon">{expandedDirs[subPath] ? '📂' : '📁'}</span>
-                      <span class="dir-name">{subName}</span>
-                    </div>
-                    
-                    {#if expandedDirs[subPath]}
-                      <!-- Recursively render subdirectories would go here -->
-                    {/if}
+                     <button
+                       type="button"
+                       class="dir-item"
+                       on:click|stopPropagation={() => toggleDir(subPath)}
+                       aria-expanded={expandedDirs[subPath] ? 'true' : 'false'}
+                     >
+                       <span class="dir-icon">{expandedDirs[subPath] ? '📂' : '📁'}</span>
+                       <span class="dir-name">{subName}</span>
+                     </button>
+
+                     {#if expandedDirs[subPath]}
+                       <!-- Recursively render subdirectories would go here -->
+                       <!-- Potential future enhancement: <svelte:self fileStructure={subContent} currentPath={subPath + '/'} /> -->
+                     {/if}
                   </div>
                 {:else}
                   <!-- File in subdirectory -->
-                  <div 
-                    class="file-item" 
-                    on:click|stopPropagation={() => selectFile(subPath)}
-                  >
-                    <span class="file-icon">{getFileIcon(subName)}</span>
-                    <span class="file-name">{subName}</span>
-                  </div>
+                   <button
+                     type="button"
+                     class="file-item"
+                     on:click|stopPropagation={() => selectFile(subPath)}
+                   >
+                     <span class="file-icon">{getFileIcon(subName)}</span>
+                     <span class="file-name">{subName}</span>
+                   </button>
                 {/if}
               {/each}
             </div>
@@ -98,60 +112,118 @@
         </div>
       {:else}
         <!-- File -->
-        <div 
-          class="file-item" 
-          on:click={() => selectFile(path)}
-        >
-          <span class="file-icon">{getFileIcon(name)}</span>
-          <span class="file-name">{name}</span>
-        </div>
+         <button
+           type="button"
+           class="file-item"
+           on:click={() => selectFile(path)}
+         >
+           <span class="file-icon">{getFileIcon(name)}</span>
+           <span class="file-name">{name}</span>
+         </button>
       {/if}
     {/each}
   </div>
 </div>
 
-<style>
+<style lang="postcss"> /* Add lang="postcss" */
   .file-tree {
-    @apply border border-gray-300 rounded-md overflow-hidden w-full mb-4;
+    /* Removed @apply comment */
+    border-width: 1px;
+    border-color: #d1d5db; /* border-gray-300 */
+    border-radius: 0.375rem; /* rounded-md */
+    overflow: hidden;
+    width: 100%;
+    margin-bottom: 1rem; /* mb-4 */
   }
-  
+
   .file-tree-header {
-    @apply bg-gray-800 text-white p-2 flex justify-between items-center text-sm;
+    /* Removed @apply comment */
+    background-color: #1f2937; /* bg-gray-800 */
+    color: #ffffff; /* text-white */
+    padding: 0.5rem; /* p-2 */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.875rem; /* text-sm */
+    line-height: 1.25rem;
   }
-  
+
   .current-path {
-    @apply font-mono;
+    /* Removed @apply comment */
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   }
-  
+
   .refresh-button {
-    @apply text-xs bg-gray-700 hover:bg-gray-600 rounded px-2 py-1;
+    /* Removed @apply comment */
+    font-size: 0.75rem; /* text-xs */
+    line-height: 1rem;
+    background-color: #374151; /* bg-gray-700 */
+    border-radius: 0.25rem; /* rounded */
+    padding-left: 0.5rem; /* px-2 */
+    padding-right: 0.5rem;
+    padding-top: 0.25rem; /* py-1 */
+    padding-bottom: 0.25rem;
+    color: white; /* Ensure text is visible */
+    border: none; /* Remove default button border */
+    cursor: pointer; /* Add pointer cursor */
   }
-  
+  .refresh-button:hover {
+     background-color: #4b5563; /* hover:bg-gray-600 */
+  }
+
   .file-tree-content {
-    @apply p-2 bg-white;
+    /* Removed @apply comment */
+    padding: 0.5rem; /* p-2 */
+    background-color: #ffffff; /* bg-white */
   }
-  
+
   .dir-item, .file-item {
-    @apply flex items-center p-1 cursor-pointer text-sm rounded hover:bg-gray-100;
+    /* Removed @apply comment */
+    /* Base styles for button */
+    display: flex;
+    align-items: center;
+    padding: 0.25rem; /* p-1 */
+    cursor: pointer;
+    font-size: 0.875rem; /* text-sm */
+    line-height: 1.25rem;
+    border-radius: 0.25rem; /* rounded */
+    /* Ensure button takes full width and text aligns left */
+    width: 100%;
+    text-align: left;
+    /* Remove default button appearance */
+    background: none;
+    border: none;
+    color: inherit;
   }
-  
+  .dir-item:hover, .file-item:hover {
+     background-color: #f3f4f6; /* hover:bg-gray-100 */
+  }
+
   .dir-icon, .file-icon {
-    @apply mr-1;
+    /* Removed @apply comment */
+    margin-right: 0.25rem; /* mr-1 */
   }
-  
+
   .dir-name {
-    @apply font-medium;
+    /* Removed @apply comment */
+    font-weight: 500;
   }
-  
+
   .file-name {
-    @apply text-gray-700;
+    /* Removed @apply comment */
+    color: #374151; /* text-gray-700 */
   }
-  
+
   .dir-contents {
-    @apply pl-4 border-l border-gray-200 ml-2;
+    /* Removed @apply comment */
+    padding-left: 1rem; /* pl-4 */
+    border-left-width: 1px;
+    border-color: #e5e7eb; /* border-gray-200 */
+    margin-left: 0.5rem; /* ml-2 */
   }
-  
+
   .sub-directory {
-    @apply mt-1;
+    /* Removed @apply comment */
+    margin-top: 0.25rem; /* mt-1 */
   }
 </style>

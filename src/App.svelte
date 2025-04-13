@@ -1,35 +1,46 @@
-<script>
+<script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import Message from './components/chat/Message.svelte';
   import FileTree from './components/chat/FileTree.svelte';
-  import { chatStore } from './stores/chatStore';
-  import { connectWebSocket, onMessage, onStatusUpdate } from './services/n8nService';
+  import { chatStore, type ChatMessage } from './stores/chatStore'; // Remove .ts extension
+  import { connectWebSocket, onMessage, onStatusUpdate } from './services/n8nService'; // Remove .ts extension
+  import type { SvelteComponent } from 'svelte'; // Import SvelteComponent type
+
+  // Remove local definition, use imported ChatMessage
+
+  // Define a type for the special message handler result
+  interface SpecialMessageConfig {
+    component: typeof FileTree | typeof Message; // Be more specific or use typeof SvelteComponent
+    props: Record<string, any>;
+  }
   
   // State management
-  let messages = [];
-  let inputValue = '';
-  let chatContainer;
-  let isTyping = false;
-  let connectionStatus = 'disconnected';
-  let sessionId;
+  let messages: ChatMessage[] = [];
+  let inputValue: string = '';
+  let chatContainer: HTMLElement | null = null; // Can be null initially
+  let isTyping: boolean = false;
+  let connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
+  let sessionId: string | null = null; // Session ID might be null initially
   
   // Subscribe to the store
-  const unsubscribe = chatStore.subscribe(state => {
+  const unsubscribe = chatStore.subscribe((state: any) => { // Use 'any' for now, refine store later if needed
     messages = state.messages;
     isTyping = state.isTyping;
-    connectionStatus = state.connectionStatus;
+    connectionStatus = state.connectionStatus as 'disconnected' | 'connecting' | 'connected' | 'error'; // Cast type
     sessionId = state.sessionId;
   });
   
+  // --- Function Definitions ---
+
   // Handle special message types
-  function handleSpecialMessageTypes(message) {
+  function handleSpecialMessageTypes(message: ChatMessage): SpecialMessageConfig | null {
     if (message.type === 'file_tree') {
-      return {
-        component: FileTree,
-        props: { 
-          fileStructure: message.metadata?.fileStructure || {},
+     return {
+       component: FileTree, // Use the component directly
+       props: {
+         fileStructure: message.metadata?.fileStructure || {},
           currentPath: message.metadata?.currentPath || '~/',
-          onFileSelect: (path) => {
+          onFileSelect: (path: string) => { // Add type for path
             console.log('File selected:', path);
             chatStore.sendMessage(`Show me the contents of ${path}`);
           },
@@ -40,18 +51,80 @@
         }
       };
     }
-    
     return null; // Use default message rendering
   }
+
+  // WebSocket setup and handling
+  function setupWebSocket() {
+    chatStore.updateConnectionStatus('connecting'); // Use exported function
+    
+    // Ensure sessionId is a string before connecting
+    if (typeof sessionId === 'string') {
+      const callbacks = {
+          onConnect: () => {
+            chatStore.updateConnectionStatus('connected'); // Use exported function
+          },
+          onDisconnect: () => {
+            chatStore.updateConnectionStatus('disconnected'); // Use exported function
+            // Optional: Add retry logic with backoff
+            // setTimeout(setupWebSocket, 5000);
+          },
+          onError: (error: Event) => { // Add type for error
+            console.error('WebSocket error:', error);
+            chatStore.updateConnectionStatus('error'); // Use exported function
+          }
+      };
+      connectWebSocket(sessionId, callbacks); // Pass callbacks object
+    } else {
+      console.error("Session ID is not set, cannot connect WebSocket.");
+      chatStore.updateConnectionStatus('error'); // Use exported function
+    }
+  }
   
-  // Lifecycle hooks
+  // Message handling
+  function handleIncomingMessage(message: any) { // Use 'any' for now, or import IncomingMessage if needed
+    chatStore.addMessage(message); // Use exported function
+    
+    // Use requestAnimationFrame for smoother scrolling after DOM update
+    requestAnimationFrame(() => {
+      if (chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+    }); // Removed extra ', 0' argument
+  }
+
+  function handleStatusUpdate(status: { typing?: boolean }) { // Add type for status
+    // Use the specific update function from the store
+    if (status.typing !== undefined) {
+        chatStore.updateTypingStatus(status.typing); // Use the exported function
+    }
+  }
+
+  async function handleSubmit() {
+    if (!inputValue.trim()) return;
+    
+    const message = inputValue;
+    inputValue = '';
+    
+    await chatStore.sendMessage(message);
+    
+    // Use requestAnimationFrame for smoother scrolling after DOM update
+    requestAnimationFrame(() => {
+      if (chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+    }); // Removed extra ', 0' argument
+  }
+
+  // --- Lifecycle hooks ---
   onMount(() => {
     // Add initial welcome message if needed
     if (messages.length === 0) {
+      // Use chatStore.addMessage with the correct structure (needs content, type, sender)
       chatStore.addMessage({
         content: "# Welcome to Sadie UI!\n\nI'm Sadie, your AI companion. I can help you with coding, answer questions, and assist with various tasks.\n\nTry these examples to see different message types:\n- Type 'code' for a code example\n- Type 'terminal' for terminal output\n- Type 'files' to see file browser\n- Type anything else for a regular response",
-        type: 'text',
-        sender: 'ai'
+        type: 'text', // Optional, defaults in store
+        sender: 'ai'  // Optional, defaults in store
       });
     }
     
@@ -64,60 +137,6 @@
   onDestroy(() => {
     unsubscribe();
   });
-  
-  // WebSocket setup and handling
-  function setupWebSocket() {
-    chatStore.updateConnectionStatus('connecting');
-    
-    connectWebSocket(sessionId, {
-      onConnect: () => {
-        chatStore.updateConnectionStatus('connected');
-      },
-      onDisconnect: () => {
-        chatStore.updateConnectionStatus('disconnected');
-        setTimeout(setupWebSocket, 5000);
-      },
-      onError: (error) => {
-        console.error('WebSocket error:', error);
-        chatStore.updateConnectionStatus('error');
-      }
-    });
-  }
-  
-  // Message handling
-  function handleIncomingMessage(message) {
-    chatStore.addMessage(message);
-    
-    setTimeout(() => {
-      if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-      }
-    }, 0);
-  }
-  
-  function handleStatusUpdate(status) {
-    if (status.typing) {
-      chatStore.update(s => {
-        s.isTyping = status.typing;
-        return s;
-      });
-    }
-  }
-  
-  async function handleSubmit() {
-    if (!inputValue.trim()) return;
-    
-    const message = inputValue;
-    inputValue = '';
-    
-    await chatStore.sendMessage(message);
-    
-    setTimeout(() => {
-      if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-      }
-    }, 0);
-  }
 </script>
 
 <main class="min-h-screen flex flex-col bg-gray-50">
@@ -150,11 +169,16 @@
   <div class="flex-1 container mx-auto max-w-4xl flex flex-col p-4">
     <div class="flex-1 overflow-y-auto bg-white rounded-lg shadow-sm p-4 mb-4 border border-gray-200" bind:this={chatContainer}>
       {#each messages as message (message.id)}
-        {#if handleSpecialMessageTypes(message)}
-          {@const specialMessage = handleSpecialMessageTypes(message)}
+        {@const specialMessage = handleSpecialMessageTypes(message)}
+        {#if specialMessage && specialMessage.component === FileTree}
           <svelte:component this={specialMessage.component} {...specialMessage.props} />
         {:else}
-          <Message {message} />
+          {@const messageProps = {
+            ...message,
+            timestamp: message.timestamp ?? new Date(),
+            metadata: message.metadata ?? {} // Ensure metadata is always an object
+          }}
+          <Message message={messageProps} />
         {/if}
       {/each}
       
@@ -191,13 +215,23 @@
   </div>
 </main>
 
-<style>
+<style lang="postcss"> /* Add lang="postcss" for Tailwind */
   .typing-indicator {
-    @apply flex space-x-1 ml-2;
+    /* @apply flex space-x-1 ml-2; */
+    display: flex;
+    margin-left: 0.5rem; /* ml-2 */
   }
+  .typing-indicator span + span {
+     margin-left: 0.25rem; /* space-x-1 */
+  }
+  /* Removed extra closing brace */
   
   .typing-indicator span {
-    @apply w-2 h-2 bg-gray-400 rounded-full;
+    /* @apply w-2 h-2 bg-gray-400 rounded-full; */
+    width: 0.5rem; /* w-2 */
+    height: 0.5rem; /* h-2 */
+    background-color: #9ca3af; /* bg-gray-400 */
+    border-radius: 9999px; /* rounded-full */
     animation: typing-animation 1.4s infinite ease-in-out both;
   }
   
