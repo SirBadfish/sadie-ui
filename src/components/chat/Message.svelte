@@ -1,67 +1,137 @@
 <script>
-  export let message = '';
-  export let sender = 'ai'; // 'user' or 'ai'
-  export let timestamp = new Date();
+  import MarkdownRenderer from './MarkdownRenderer.svelte';
+  import CodeBlock from './CodeBlock.svelte';
+  import TerminalBlock from './TerminalBlock.svelte';
+  import FileTree from './FileTree.svelte';
+
+  // Props
+  export let message = {
+    id: '',
+    content: '',
+    type: 'text', // text, code, system, terminal, file_tree
+    sender: 'ai', // user or ai
+    timestamp: new Date(),
+    metadata: {} // Additional data based on message type
+  };
+
+  // Format time for display
+  const formatTime = (date) => {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+  
+  // Handle file selection from file tree
+  function handleFileSelect(event) {
+    const path = event.detail.path;
+    console.log('File selected:', path);
+    // In the future, this could trigger a file fetch action
+  }
+
+  // Add special handling for AI Transform code results
+  function renderCodeFromAITransform(code, language) {
+    // Enhanced code visualization for AI Transform results
+    return {
+      highlighted: processCodeForDisplay(code, language),
+      copyable: true,
+      showLineNumbers: true
+    };
+  }
 </script>
 
-<div class="message {sender === 'user' ? 'message-user' : 'message-ai'}">
+<div class="message {message.sender === 'user' ? 'message-user' : 'message-ai'}">
   <div class="message-content">
-    {#if sender === 'ai'}
+    {#if message.sender === 'ai'}
       <div class="avatar">S</div>
     {/if}
+    
     <div class="text">
-      <div class="message-text">{message}</div>
-      <div class="timestamp">{timestamp.toLocaleTimeString()}</div>
+      {#if message.type === 'text'}
+        <div class="message-text">
+          <MarkdownRenderer content={message.content} />
+        </div>
+      {:else if message.type === 'code'}
+        <CodeBlock 
+          code={message.content} 
+          language={message.metadata.language || 'plaintext'} 
+          filename={message.metadata.filename || null}
+        />
+      {:else if message.type === 'system'}
+        <div class="system-message">
+          <div class="icon">ℹ️</div>
+          <div>{message.content}</div>
+        </div>
+      {:else if message.type === 'terminal'}
+        <TerminalBlock
+          command={message.metadata.command || ''}
+          output={message.content}
+          isRunning={message.metadata.isRunning || false}
+          exitCode={message.metadata.exitCode !== undefined ? message.metadata.exitCode : null}
+        />
+      {:else if message.type === 'file_tree'}
+        <FileTree
+          fileStructure={message.metadata.fileStructure || {}}
+          currentPath={message.metadata.currentPath || '~/'}
+          on:select={handleFileSelect}
+          on:refresh={() => console.log('Refresh requested')}
+        />
+      {/if}
+
+      {#if message.metadata?.source === 'ai_transform'}
+        <div class="code-from-ai-transform">
+          <div class="code-header">
+            <span>AI Generated Code</span>
+            <button on:click={() => copyToClipboard(message.content)}>Copy</button>
+          </div>
+          <CodeBlock 
+            code={message.content}
+            language={message.metadata.language || 'javascript'}
+            showLineNumbers={true}
+          />
+        </div>
+      {/if}
+      
+      <div class="timestamp">{formatTime(message.timestamp)}</div>
     </div>
   </div>
 </div>
 
 <style>
   .message {
-    margin-bottom: 1rem;
-    padding: 0.5rem;
+    @apply mb-4 px-2;
   }
   
   .message-content {
-    display: flex;
-    align-items: flex-start;
+    @apply flex items-start;
   }
   
   .message-user {
-    justify-content: flex-end;
+    @apply flex justify-end;
   }
   
   .message-ai {
-    justify-content: flex-start;
+    @apply flex justify-start;
   }
   
   .avatar {
-    width: 2rem;
-    height: 2rem;
-    border-radius: 50%;
-    background-color: #3B82F6;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 0.5rem;
+    @apply w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center mr-2 flex-shrink-0;
   }
   
   .text {
-    background-color: #f3f4f6;
-    padding: 0.75rem;
-    border-radius: 0.5rem;
-    max-width: 80%;
+    @apply bg-white p-3 rounded-md shadow-sm max-w-[80%] border border-gray-200;
   }
   
   .message-user .text {
-    background-color: #dbeafe;
+    @apply bg-blue-50 border-blue-200;
   }
   
   .timestamp {
-    font-size: 0.75rem;
-    color: #6b7280;
-    margin-top: 0.25rem;
-    text-align: right;
+    @apply text-xs text-gray-500 mt-1 text-right;
+  }
+  
+  .system-message {
+    @apply flex items-center bg-gray-100 p-2 rounded;
+  }
+  
+  .system-message .icon {
+    @apply mr-2;
   }
 </style>
