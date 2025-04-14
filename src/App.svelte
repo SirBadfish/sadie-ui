@@ -2,241 +2,295 @@
   import { onMount, onDestroy } from 'svelte';
   import Message from './components/chat/Message.svelte';
   import FileTree from './components/chat/FileTree.svelte';
-  import { chatStore, type ChatMessage } from './stores/chatStore'; // Remove .ts extension
-  import { connectWebSocket, onMessage, onStatusUpdate } from './services/n8nService'; // Remove .ts extension
-  import type { SvelteComponent } from 'svelte'; // Import SvelteComponent type
-
-  // Remove local definition, use imported ChatMessage
+  import { chatStore, type ChatMessage } from './stores/chatStore';
+  // Removed fileOperation, executeCommand as they are no longer exported/used directly
+  import { connectWebSocket, onMessage, onStatusUpdate, sendMessage, disconnect } from './services/n8nService';
+  import type { SvelteComponent } from 'svelte';
+  import CodeBlock from './components/chat/CodeBlock.svelte';
+  import TerminalBlock from './components/chat/TerminalBlock.svelte';
+  import MarkdownRenderer from './components/chat/MarkdownRenderer.svelte';
 
   // Define a type for the special message handler result
   interface SpecialMessageConfig {
-    component: typeof FileTree | typeof Message; // Be more specific or use typeof SvelteComponent
+    component: typeof FileTree | typeof Message | typeof CodeBlock | typeof TerminalBlock | typeof MarkdownRenderer;
     props: Record<string, any>;
   }
-  
+
   // State management
   let messages: ChatMessage[] = [];
   let inputValue: string = '';
-  let chatContainer: HTMLElement | null = null; // Can be null initially
+  let chatContainer: HTMLElement | null = null;
+  let connectionStatus: string = 'disconnected';
+  let isSending: boolean = false;
   let isTyping: boolean = false;
-  let connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
-  let sessionId: string | null = null; // Session ID might be null initially
   
-  // Subscribe to the store
-  const unsubscribe = chatStore.subscribe((state: any) => { // Use 'any' for now, refine store later if needed
-    messages = state.messages;
-    isTyping = state.isTyping;
-    connectionStatus = state.connectionStatus as 'disconnected' | 'connecting' | 'connected' | 'error'; // Cast type
-    sessionId = state.sessionId;
-  });
-  
-  // --- Function Definitions ---
+  // n8n connection config
+  const n8nConfig = {
+    url: 'http://localhost:5678/webhook/sadie/sse', // Use the correct Chat Trigger SSE URL
+    token: null
+  };
 
-  // Handle special message types
-  function handleSpecialMessageTypes(message: ChatMessage): SpecialMessageConfig | null {
-    if (message.type === 'file_tree') {
-     return {
-       component: FileTree, // Use the component directly
-       props: {
-         fileStructure: message.metadata?.fileStructure || {},
-          currentPath: message.metadata?.currentPath || '~/',
-          onFileSelect: (path: string) => { // Add type for path
-            console.log('File selected:', path);
-            chatStore.sendMessage(`Show me the contents of ${path}`);
-          },
-          onRefresh: () => {
-            console.log('Refresh requested');
-            chatStore.sendMessage('Refresh my file list');
-          }
-        }
-      };
-    }
-    return null; // Use default message rendering
-  }
-
-  // WebSocket setup and handling
-  function setupWebSocket() {
-    chatStore.updateConnectionStatus('connecting'); // Use exported function
-    
-    // Ensure sessionId is a string before connecting
-    if (typeof sessionId === 'string') {
-      const callbacks = {
-          onConnect: () => {
-            chatStore.updateConnectionStatus('connected'); // Use exported function
-          },
-          onDisconnect: () => {
-            chatStore.updateConnectionStatus('disconnected'); // Use exported function
-            // Optional: Add retry logic with backoff
-            // setTimeout(setupWebSocket, 5000);
-          },
-          onError: (error: Event) => { // Add type for error
-            console.error('WebSocket error:', error);
-            chatStore.updateConnectionStatus('error'); // Use exported function
-          }
-      };
-      connectWebSocket(sessionId, callbacks); // Pass callbacks object
-    } else {
-      console.error("Session ID is not set, cannot connect WebSocket.");
-      chatStore.updateConnectionStatus('error'); // Use exported function
-    }
-  }
-  
-  // Message handling
-  function handleIncomingMessage(message: any) { // Use 'any' for now, or import IncomingMessage if needed
-    chatStore.addMessage(message); // Use exported function
-    
-    // Use requestAnimationFrame for smoother scrolling after DOM update
-    requestAnimationFrame(() => {
+  onMount(async () => {
+    // Subscribe to the chat store
+    const unsubscribe = chatStore.subscribe(state => {
+      messages = state.messages;
+      isTyping = state.isTyping;
+      
+      // Auto-scroll to bottom when messages change - with safe null check
       if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+        setTimeout(() => {
+          if (chatContainer) {  // Double-check to be safe
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+          }
+        }, 0);
       }
-    }); // Removed extra ', 0' argument
-  }
+    });
+    
+    // Register message handler
+    onMessage(handleIncomingMessage);
+    
+    // Register status handler
+    onStatusUpdate(status => {
+      connectionStatus = status;
+      
+      if (status === 'connected') {
+        chatStore.addMessage('system', 'Connected to Sadie. How can I help you today?', 'system');
+      } else if (status === 'disconnected' || status === 'error') {
+        chatStore.addMessage('system', `Connection ${status}. Attempting to reconnect...`, 'system');
+      }
+    });
+    
+    // Connect to n8n
+    try {
+      await connectWebSocket(n8nConfig.url, n8nConfig.token);
+    } catch (error) {
+      console.error('Failed to connect to n8n:', error);
+      chatStore.addMessage('system', 'Failed to connect to Sadie. Please try again later.', 'system');
+    }
+    
+    return () => {
+      unsubscribe();
+    };
+  });
 
-  function handleStatusUpdate(status: { typing?: boolean }) { // Add type for status
-    // Use the specific update function from the store
-    if (status.typing !== undefined) {
-        chatStore.updateTypingStatus(status.typing); // Use the exported function
+  onDestroy(() => {
+    // Disconnect from n8n
+    if (connectionStatus === 'connected') {
+      disconnect();
+    }
+  });
+
+  /**
+   * Handles incoming messages from n8n
+   * @param {any} data - The message data
+   */
+  function handleIncomingMessage(data: any) {
+    console.log("Handling incoming data:", data); // Log received data
+    isSending = false; // Always turn off sending indicator when a response arrives
+
+    // Check if it's the error format from n8nService
+    if (data?.type === 'error' && data.error) {
+       chatStore.addMessage('system', `Error: ${data.error}`, 'system');
+    } 
+    // Check if it's the direct object format { "output": "..." }
+    else if (data?.output && typeof data.output === 'string') {
+       chatStore.addMessage('text', data.output, 'ai'); 
+    } 
+    // Keep the check for the array format [{ "output": "..." }] just in case
+    else if (Array.isArray(data) && data.length > 0 && data[0]?.output && typeof data[0].output === 'string') {
+       console.warn("Received response as array, expected direct object. Handling anyway.");
+       chatStore.addMessage('text', data[0].output, 'ai'); 
+    }
+    else {
+      // Fallback for unexpected format
+      console.warn("Received unexpected message format:", data);
+      chatStore.addMessage('system', `Received unexpected data: ${JSON.stringify(data)}`, 'system'); 
     }
   }
-
-  async function handleSubmit() {
-    if (!inputValue.trim()) return;
+  
+  /**
+   * Sends a message to n8n
+   */
+  async function handleSendMessage() {
+    if (!inputValue.trim() || isSending) return;
     
-    const message = inputValue;
+    // Check connection status before sending
+    // Note: With standard webhook, 'connected' status is simulated after a delay
+    if (connectionStatus !== 'connected') { 
+      chatStore.addMessage('system', 'Not connected to Sadie. Please wait for connection to be established.', 'system');
+      return;
+    }
+    
+    chatStore.addMessage('text', inputValue, 'user');
+    isSending = true;
+    
+    // Clear the input field
+    const messageText = inputValue;
     inputValue = '';
     
-    await chatStore.sendMessage(message);
-    
-    // Use requestAnimationFrame for smoother scrolling after DOM update
-    requestAnimationFrame(() => {
-      if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-      }
-    }); // Removed extra ', 0' argument
-  }
-
-  // --- Lifecycle hooks ---
-  onMount(() => {
-    // Add initial welcome message if needed
-    if (messages.length === 0) {
-      // Use chatStore.addMessage with the correct structure (needs content, type, sender)
-      chatStore.addMessage({
-        content: "# Welcome to Sadie UI!\n\nI'm Sadie, your AI companion. I can help you with coding, answer questions, and assist with various tasks.\n\nTry these examples to see different message types:\n- Type 'code' for a code example\n- Type 'terminal' for terminal output\n- Type 'files' to see file browser\n- Type anything else for a regular response",
-        type: 'text', // Optional, defaults in store
-        sender: 'ai'  // Optional, defaults in store
-      });
+    try {
+      // Send the message to n8n
+      await sendMessage(messageText);
+      // Note: Response is handled by handleIncomingMessage now, no need to process here
+    } catch (error) {
+      console.error('Error sending message:', error);
+      // Error should have been added by callTool's catch block via handleMessage
+      // chatStore.addMessage('system', 'Failed to send message. Please try again.', 'system'); 
+      isSending = false; // Ensure sending indicator is turned off on error
     }
-    
-    // Set up connections and handlers
-    setupWebSocket();
-    onMessage(handleIncomingMessage);
-    onStatusUpdate(handleStatusUpdate);
-  });
+    // Removed isSending = false here; it's set in handleIncomingMessage now
+  }
   
-  onDestroy(() => {
-    unsubscribe();
-  });
+  // Removed runTerminalCommand and performFileOperation functions 
+  // as the underlying service functions are no longer exported/supported in this setup.
+  // Tool usage must now go through natural language requests to the AI Agent in n8n.
+  
+  /**
+   * Handles key press events on the input field
+   * @param {KeyboardEvent} event - The key event
+   */
+  function handleKeyPress(event: KeyboardEvent) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSendMessage();
+    }
+  }
+  
+  /**
+   * Determines the appropriate component for each message type
+   * @param {ChatMessage} message - The message object
+   * @returns {SpecialMessageConfig} - The component config
+   */
+  function getMessageComponent(message: ChatMessage): SpecialMessageConfig {
+    switch (message.type) {
+      case 'text':
+        return {
+          component: Message,
+          props: { message }
+        };
+      case 'code':
+        return {
+          component: CodeBlock,
+          props: { 
+            code: message.content,
+            language: message.metadata?.language || 'javascript',
+            filename: message.metadata?.filename,
+            sender: message.sender
+          }
+        };
+      case 'terminal':
+        return {
+          component: TerminalBlock,
+          props: {
+            output: message.content,
+            command: message.metadata?.command || '',
+            sender: message.sender
+          }
+        };
+      case 'file_tree':
+        return {
+          component: FileTree,
+          props: {
+            // Assuming content is the structured data for FileTree
+            fileStructure: typeof message.content === 'object' ? message.content : {}, 
+            currentPath: message.metadata?.root || '/', // Use root for path
+            sender: message.sender
+          }
+        };
+      case 'system':
+        return {
+          component: Message,
+          props: { 
+            message,
+            isSystem: true
+          }
+        };
+      default:
+         console.warn(`Unhandled message type: ${message.type}. Rendering as text.`);
+        // Render unknown types as plain text message for now
+        return {
+          component: Message,
+          props: { 
+             message: new ChatMessage('text', `Unhandled type '${message.type}': ${message.content}`, message.sender)
+           }
+        };
+    }
+  }
 </script>
 
-<main class="min-h-screen flex flex-col bg-gray-50">
-  <!-- Header with connection status -->
+<main class="flex flex-col h-screen bg-gray-100 dark:bg-gray-900">
   <header class="bg-blue-600 text-white p-4 shadow-md">
     <div class="container mx-auto flex justify-between items-center">
-      <h1 class="text-xl font-bold">Sadie UI</h1>
+      <h1 class="text-2xl font-bold">Sadie UI</h1>
       <div class="flex items-center space-x-2">
-        <span class="text-sm">
-          {#if connectionStatus === 'connected'}
-            Connected to n8n
-          {:else if connectionStatus === 'connecting'}
-            Connecting to n8n...
-          {:else if connectionStatus === 'error'}
-            Connection error
-          {:else}
-            Disconnected
-          {/if}
-        </span>
-        <div class="w-3 h-3 rounded-full 
-          {connectionStatus === 'connected' ? 'bg-green-400' : 
-           connectionStatus === 'connecting' ? 'bg-yellow-400' : 
-           connectionStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'}">
+        <div class="relative inline-flex items-center">
+          <span class="mr-2">Status:</span>
+          <span class={`h-3 w-3 rounded-full ${
+            connectionStatus === 'connected' ? 'bg-green-500' : 
+            connectionStatus === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
+          }`}></span>
+          <span class="ml-1">{connectionStatus}</span>
         </div>
       </div>
     </div>
   </header>
   
-  <!-- Main chat area -->
-  <div class="flex-1 container mx-auto max-w-4xl flex flex-col p-4">
-    <div class="flex-1 overflow-y-auto bg-white rounded-lg shadow-sm p-4 mb-4 border border-gray-200" bind:this={chatContainer}>
+  <div class="flex-1 overflow-hidden flex flex-col container mx-auto p-4">
+    <div bind:this={chatContainer} class="flex-1 overflow-y-auto mb-4 space-y-4">
       {#each messages as message (message.id)}
-        {@const specialMessage = handleSpecialMessageTypes(message)}
-        {#if specialMessage && specialMessage.component === FileTree}
-          <svelte:component this={specialMessage.component} {...specialMessage.props} />
-        {:else}
-          {@const messageProps = {
-            ...message,
-            timestamp: message.timestamp ?? new Date(),
-            metadata: message.metadata ?? {} // Ensure metadata is always an object
-          }}
-          <Message message={messageProps} />
-        {/if}
+        {@const componentConfig = getMessageComponent(message)}
+        <svelte:component this={componentConfig.component} {...componentConfig.props} />
       {/each}
       
-      {#if isTyping}
-        <div class="flex items-center ml-10 mt-2">
-          <div class="typing-indicator">
+      {#if isSending}
+        <div class="flex items-center text-gray-500 dark:text-gray-400">
+          <span class="typing-indicator">
             <span></span>
             <span></span>
             <span></span>
-          </div>
+          </span>
+          <span class="ml-2">Sadie is typing...</span>
         </div>
       {/if}
     </div>
     
-    <!-- Message input -->
-    <div class="p-4 bg-white rounded-lg shadow-sm border border-gray-200">
-      <form on:submit|preventDefault={handleSubmit} class="flex gap-2">
-        <input 
-          type="text" 
-          bind:value={inputValue} 
-          placeholder="Type a message..." 
-          class="flex-1 p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-          disabled={isTyping}
-        />
-        <button 
-          type="submit" 
-          class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors disabled:bg-blue-400"
-          disabled={isTyping || !inputValue.trim()}
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
+      <div class="flex">
+        <textarea
+          bind:value={inputValue}
+          on:keydown={handleKeyPress}
+          placeholder="Message Sadie..."
+          class="flex-1 p-2 border rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+          rows="3"
+          disabled={isSending || connectionStatus !== 'connected'}
+        ></textarea>
+        <button
+          on:click={handleSendMessage}
+          class="ml-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={!inputValue.trim() || isSending || connectionStatus !== 'connected'}
         >
           Send
         </button>
-      </form>
+      </div>
     </div>
   </div>
 </main>
 
-<style lang="postcss"> /* Add lang="postcss" for Tailwind */
+<style>
   .typing-indicator {
-    /* @apply flex space-x-1 ml-2; */
-    display: flex;
-    margin-left: 0.5rem; /* ml-2 */
+    display: inline-flex;
+    align-items: center;
   }
-  .typing-indicator span + span {
-     margin-left: 0.25rem; /* space-x-1 */
-  }
-  /* Removed extra closing brace */
   
   .typing-indicator span {
-    /* @apply w-2 h-2 bg-gray-400 rounded-full; */
-    width: 0.5rem; /* w-2 */
-    height: 0.5rem; /* h-2 */
-    background-color: #9ca3af; /* bg-gray-400 */
-    border-radius: 9999px; /* rounded-full */
-    animation: typing-animation 1.4s infinite ease-in-out both;
-  }
-  
-  .typing-indicator span:nth-child(1) {
-    animation-delay: 0s;
+    height: 8px;
+    width: 8px;
+    margin: 0 2px;
+    background-color: currentColor;
+    border-radius: 50%;
+    display: inline-block;
+    opacity: 0.4;
+    animation: typing 1.4s infinite both;
   }
   
   .typing-indicator span:nth-child(2) {
@@ -247,12 +301,18 @@
     animation-delay: 0.4s;
   }
   
-  @keyframes typing-animation {
-    0%, 100% {
+  @keyframes typing {
+    0% {
+      opacity: 0.4;
       transform: translateY(0);
     }
     50% {
-      transform: translateY(-5px);
+      opacity: 1;
+      transform: translateY(-4px);
+    }
+    100% {
+      opacity: 0.4;
+      transform: translateY(0);
     }
   }
 </style>

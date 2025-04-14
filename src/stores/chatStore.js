@@ -1,117 +1,88 @@
+// src/stores/chatStore.js
 import { writable } from 'svelte/store';
-import { sendMessage } from '../services/n8nService';
 
-// Initial state
-const initialState = {
-  messages: [],
-  isTyping: false,
-  connectionStatus: 'disconnected', // 'connected', 'disconnected', 'connecting', 'error'
-  sessionId: `session_${Date.now()}`
+// Define the message type enum
+export const MessageType = {
+  TEXT: 'text',
+  CODE: 'code',
+  TERMINAL: 'terminal',
+  FILE_TREE: 'file_tree',
+  DIFF: 'diff',
+  DIAGRAM: 'diagram',
+  VOICE: 'voice',
+  SYSTEM: 'system'
 };
 
-// Create the writable store
-const store = writable(initialState);
+// Define the ChatMessage class
+export class ChatMessage {
+  type;
+  content;
+  sender;
+  timestamp;
+  id;
+  metadata;
 
-// Helper functions
-export const chatStore = {
-  subscribe: store.subscribe,
-  update: store.update,
-  
-  // Add a user message and send to n8n
-  async sendMessage(content) {
-    let state;
-    store.update(s => {
-      // Add user message to state
-      const userMessage = {
-        id: Date.now().toString(),
-        content,
-        type: 'text',
-        sender: 'user',
-        timestamp: new Date(),
-        metadata: {}
-      };
-      s.messages = [...s.messages, userMessage];
-      s.isTyping = true;
-      state = s;
-      return s;
-    });
+  constructor(type, content, sender, metadata = {}) {
+    this.type = type;
+    this.content = content;
+    this.sender = sender;
+    this.timestamp = new Date();
+    this.id = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    this.metadata = metadata;
+  }
+}
+
+// Create the chat store with initial state
+function createChatStore() {
+  const { subscribe, update, set } = writable({
+    messages: [],
+    isTyping: false
+  });
+
+  return {
+    subscribe,
     
-    try {
-      // Send message to n8n
-      const message = {
-        content,
-        type: 'text',
-        metadata: {}
-      };
-      
-      const context = {
-        sessionId: state.sessionId,
-        messageHistory: state.messages.slice(-10) // Send last 10 messages for context
-      };
-      
-      const response = await sendMessage(message, context);
-      
-      // Add AI response
-      if (response && response.message) {
-        this.addMessage(response.message);
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      this.addSystemMessage('Error: Failed to get response. Please try again.');
-    } finally {
-      store.update(s => {
-        s.isTyping = false;
-        return s;
+    // Add a new message to the chat
+    addMessage: (type, content, sender, metadata) => {
+      const message = new ChatMessage(type, content, sender, metadata);
+      update(store => {
+        return {
+          ...store, 
+          messages: [...store.messages, message]
+        };
+      });
+      return message;
+    },
+    
+    // Update an existing message by ID
+    updateMessage: (id, newContent) => {
+      update(store => {
+        const index = store.messages.findIndex(msg => msg.id === id);
+        if (index !== -1) {
+          const updatedMessages = [...store.messages];
+          updatedMessages[index] = {
+            ...updatedMessages[index],
+            content: newContent
+          };
+          return { ...store, messages: updatedMessages };
+        }
+        return store;
+      });
+    },
+    
+    // Set the typing state
+    setTyping: (isTyping) => {
+      update(store => ({ ...store, isTyping }));
+    },
+    
+    // Clear all messages
+    clearMessages: () => {
+      set({
+        messages: [],
+        isTyping: false
       });
     }
-  },
-  
-  // Add a message to the store
-  addMessage(message) {
-    store.update(s => {
-      // Ensure message has all required fields
-      const fullMessage = {
-        id: message.id || Date.now().toString(),
-        content: message.content || '',
-        type: message.type || 'text',
-        sender: message.sender || 'ai',
-        timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
-        metadata: message.metadata || {}
-      };
-      
-      s.messages = [...s.messages, fullMessage];
-      return s;
-    });
-  },
-  
-  // Add a system message
-  addSystemMessage(content) {
-    this.addMessage({
-      content,
-      type: 'system',
-      sender: 'system',
-      metadata: {}
-    });
-  },
-  
-  // Update connection status
-  updateConnectionStatus(status) {
-    store.update(s => {
-      s.connectionStatus = status;
-      return s;
-    });
-  },
-  
-  // Clear all messages
-  clearMessages() {
-    store.update(s => {
-      s.messages = [];
-      return s;
-    });
-  },
-  
-  // Reset to initial state
-  reset() {
-    store.set(initialState);
-  }
-};
+  };
+}
+
+export const chatStore = createChatStore();
